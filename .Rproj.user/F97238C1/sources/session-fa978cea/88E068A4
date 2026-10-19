@@ -1,0 +1,27 @@
+{
+    "id": "88E068A4",
+    "path": "~/projet_bank_marketing/scripts/01_importation.R",
+    "project_path": "scripts/01_importation.R",
+    "type": "r_source",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1782072298461.0,
+    "source_on_save": false,
+    "relative_order": 1,
+    "properties": {
+        "tempName": "Untitled1",
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "82,0",
+        "scrollLine": "0"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1782073572,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1782073572749,
+    "read_only": false,
+    "read_only_alternatives": []
+}

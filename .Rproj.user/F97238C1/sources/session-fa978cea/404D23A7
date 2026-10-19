@@ -1,0 +1,27 @@
+{
+    "id": "404D23A7",
+    "path": "~/projet_bank_marketing/scripts/05_analyse_combinée.R",
+    "project_path": "scripts/05_analyse_combinée.R",
+    "type": "r_source",
+    "hash": "357678995",
+    "contents": "",
+    "dirty": false,
+    "created": 1782134828852.0,
+    "source_on_save": false,
+    "relative_order": 5,
+    "properties": {
+        "tempName": "Untitled1",
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "0,0",
+        "scrollLine": "0"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1782135095,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1782135095860,
+    "read_only": false,
+    "read_only_alternatives": []
+}

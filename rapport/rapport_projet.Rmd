@@ -1,0 +1,776 @@
+---
+title: "Mini-Projet Analyse Multivariée - Bank Marketing"
+subtitle: "Méthodes statistiques et étude de données"
+author: |
+ 
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    code_folding: show
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE, 
+  warning = FALSE, 
+  message = FALSE,
+  fig.align = "center",
+  fig.width = 10,
+  fig.height = 6
+)
+library(tidyverse)
+library(kableExtra)
+library(FactoMineR)
+library(factoextra)
+library(cluster)
+library(corrplot)
+library(ggplot2)
+```
+
+\newpage
+
+# Introduction
+
+## Contexte du projet
+
+Ce projet s'inscrit dans le cadre du module **"Méthodes statistiques et étude de données" (Analyse multivariée)** du cursus Ingénieur en Data Science & IA. L'objectif est de mettre en pratique les méthodes d'analyse multivariée sur un jeu de données réel, simulant ainsi une situation professionnelle de data scientist en phase d'analyse exploratoire.
+
+L'analyse multivariée est une branche de la statistique qui étudie simultanément plusieurs variables pour comprendre leur structure, leurs relations et leur pouvoir prédictif. Elle est largement utilisée dans les domaines du marketing, de la finance, de la santé et des sciences sociales pour :
+
+- **Réduire la dimensionnalité** des données (ACP, ACM)
+- **Segmenter** des populations en groupes homogènes (K-means, CAH)
+- **Identifier** des profils et des comportements types
+
+## Problématique
+
+La banque portugaise souhaite optimiser ses campagnes de marketing direct (télémarketing) pour la souscription de **dépôts à terme**. L'objectif est double :
+
+1. **Comprendre les facteurs** qui influencent la souscription
+2. **Identifier des profils de clients** pour cibler efficacement les futures campagnes
+
+La question centrale est :
+
+> **Quels sont les profils de clients les plus susceptibles de souscrire à un dépôt à terme, et quels facteurs (démographiques, comportementaux, économiques) influencent cette décision ?**
+
+## Présentation du jeu de données
+
+Le dataset **"Bank Marketing"** provient du [UCI Machine Learning Repository](https://archive.ics.uci.edu/ml/datasets/Bank+Marketing) (Moro et al., 2014). Il décrit les résultats d'une campagne de marketing direct d'une institution bancaire portugaise.
+
+### Caractéristiques principales
+
+| Caractéristique | Valeur |
+| :--- | :--- |
+| **Nombre d'observations** | 41 188 clients |
+| **Nombre de variables** | 21 (10 numériques, 11 catégorielles) |
+| **Variable cible** | `y` (souscription : `yes` / `no`) |
+| **Période** | Mai 2008 - Novembre 2010 |
+| **Source** | UCI Repository |
+
+### Structure des variables
+
+Les variables sont organisées en quatre groupes thématiques :
+
+| Groupe | Variables | Type |
+| :--- | :--- | :--- |
+| **Démographique** | `age`, `job`, `marital`, `education`, `default`, `housing`, `loan` | Mixte |
+| **Contact** | `contact`, `day_of_week`, `month`, `duration` | Mixte |
+| **Campagne** | `campaign`, `pdays`, `previous`, `poutcome` | Mixte |
+| **Économique** | `emp.var.rate`, `cons.price.idx`, `cons.conf.idx`, `euribor3m`, `nr.employed` | Numérique |
+| **Cible** | `y` | Binaire |
+
+\newpage
+
+# Préparation des données
+
+## Aperçu général
+
+```{r}
+# Chargement des données
+bank_data <- readRDS("../data/bank_data_raw.rds")
+
+# Structure
+cat(" DIMENSIONS :", dim(bank_data)[1], "observations x", dim(bank_data)[2], "variables\n\n")
+cat(" NOMS DES VARIABLES :\n")
+print(names(bank_data))
+```
+
+```{r}
+
+head(bank_data, 5) %>%
+  kable(caption = "Aperçu des données (5 premières lignes)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Statistiques descriptives
+
+
+
+```{r}
+numeric_vars <- names(bank_data)[sapply(bank_data, is.numeric)]
+
+bank_data %>%
+  select(all_of(numeric_vars)) %>%
+  summary() %>%
+  kable(caption = "Statistiques descriptives - Variables numériques") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+### Variables catégorielles
+
+```{r}
+categorical_vars <- names(bank_data)[sapply(bank_data, is.factor)]
+
+for(var in categorical_vars[1:4]) {
+  cat("\n###", var, "\n\n")
+  bank_data %>%
+    count(.data[[var]]) %>%
+    mutate(pourcentage = round(n / sum(n) * 100, 2)) %>%
+    kable(caption = paste("Distribution de", var)) %>%
+    kable_styling(bootstrap_options = c("striped", "hover"))
+}
+```
+
+### Variable cible
+
+```{r}
+bank_data %>%
+  count(y) %>%
+  mutate(pourcentage = round(n / sum(n) * 100, 2)) %>%
+  kable(caption = "Distribution de la souscription (y)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+Le taux de souscription est de **`r round(prop.table(table(bank_data$y))[2] * 100, 2)`%**, ce qui montre un déséquilibre important des classes (problème de déséquilibre classique en marketing direct).
+
+## Gestion des données
+
+
+
+```{r}
+missing_values <- colSums(is.na(bank_data))
+cat("Nombre total de valeurs manquantes :", sum(missing_values), "\n")
+```
+
+**Aucune valeur manquante** n'est présente dans le dataset.
+
+### Modalités "unknown"
+
+Certaines variables catégorielles contiennent la modalité `"unknown"`, qui représente une information non disponible.
+
+```{r}
+unknown_counts <- bank_data %>%
+  select(where(is.factor)) %>%
+  map(~ sum(. == "unknown" | . == "nonexistent")) %>%
+  as.data.frame() %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "n_unknown") %>%
+  filter(n_unknown > 0)
+
+unknown_counts %>%
+  kable(caption = "Variables avec modalité 'unknown'") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+**Traitement** : Ces modalités sont conservées car elles représentent une information réelle (absence de réponse) et non une erreur de saisie.
+
+### Détection des outliers
+
+```{r}
+detect_outliers <- function(x) {
+  Q1 <- quantile(x, 0.25, na.rm = TRUE)
+  Q3 <- quantile(x, 0.75, na.rm = TRUE)
+  IQR <- Q3 - Q1
+  lower <- Q1 - 1.5 * IQR
+  upper <- Q3 + 1.5 * IQR
+  return(sum(x < lower | x > upper, na.rm = TRUE))
+}
+
+outliers_count <- bank_data %>%
+  select(all_of(numeric_vars)) %>%
+  map_dfr(~ data.frame(n_outliers = detect_outliers(.))) %>%
+  rownames_to_column("variable")
+
+outliers_count %>%
+  kable(caption = "Nombre d'outliers par variable") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+**Traitement** : Les outliers sont conservés car ils représentent des cas réels (ex : clients très âgés, très jeunes, ou avec des durées d'appel extrêmes). Leur suppression pourrait biaiser l'analyse.
+
+### Normalisation
+
+Pour l'ACP, les variables numériques sont **centrées-réduites** (moyenne = 0, écart-type = 1) afin de donner la même importance à toutes les variables.
+
+```{r}
+bank_num_scaled <- readRDS("../data/bank_num_scaled.rds")
+cat("Normalisation effectuée sur", ncol(bank_num_scaled), "variables\n")
+cat("Moyennes :", round(colMeans(bank_num_scaled), 2)[1:5], "...\n")
+cat("Écarts-types :", round(apply(bank_num_scaled, 2, sd), 2)[1:5], "...\n")
+```
+
+### Matrice de corrélation
+
+```{r}
+bank_num <- readRDS("../data/bank_num.rds")
+cor_matrix <- cor(bank_num, use = "complete.obs")
+
+corrplot(cor_matrix, method = "color", type = "upper",
+         addCoef.col = "black", number.cex = 0.5,
+         title = "Matrice de corrélation - Variables numériques",
+         mar = c(0,0,2,0))
+```
+
+**Observations clés** :
+- Forte corrélation négative entre `euribor3m` et `duration` (-0.94)
+- Forte corrélation entre `emp.var.rate` et `nr.employed` (0.98)
+- Corrélation modérée entre `age` et `duration` (0.45)
+
+\newpage
+
+# Analyse factorielle - ACP
+
+
+
+L'**Analyse en Composantes Principales (ACP)** est une méthode de réduction de dimension qui transforme les variables numériques corrélées en un petit nombre de combinaisons linéaires non corrélées appelées **composantes principales**. Ces composantes capturent le maximum de variance des données.
+
+
+
+```{r}
+res_pca <- readRDS("../outputs/res_pca.rds")
+```
+
+### Variance expliquée
+
+```{r}
+eigenvalues <- get_eigenvalue(res_pca)
+eigenvalues %>%
+  kable(caption = "Valeurs propres et variance expliquée") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+```{r}
+fviz_eig(res_pca, addlabels = TRUE, 
+         barfill = "steelblue", barcolor = "steelblue",
+         title = "Variance expliquée par les composantes principales")
+```
+
+**Interprétation** :
+- Les **4 premières dimensions** expliquent **73.82%** de la variance totale
+- Le critère de Kaiser (λ > 1) retient 4 dimensions
+- La dimension 1 capture à elle seule **38.95%** de la variance
+
+### Cercle des corrélations
+
+```{r}
+fviz_pca_var(res_pca, 
+             col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE,
+             title = "Cercle des corrélations - ACP")
+```
+
+### Contributions des variables
+
+```{r}
+# Dimension 1
+fviz_contrib(res_pca, choice = "var", axes = 1, 
+             title = "Contributions à la Dimension 1", top = 10)
+```
+
+```{r}
+# Dimension 2
+fviz_contrib(res_pca, choice = "var", axes = 2,
+             title = "Contributions à la Dimension 2", top = 10)
+```
+
+### Interprétation des axes
+
+| Axe | Variance | Variables positives | Variables négatives | Interprétation |
+| :---: | :---: | :--- | :--- | :--- |
+| **Dim 1** | 38.9% | `euribor3m`, `emp.var.rate`, `nr.employed` | `duration`, `campaign`, `pdays` | **Contexte économique** vs effort commercial |
+| **Dim 2** | 13.6% | `age` | `cons.price.idx`, `cons.conf.idx` | **Profil démographique** vs conjoncture |
+| **Dim 3** | 10.8% | `pdays`, `previous` | - | **Historique de contact** |
+| **Dim 4** | 10.5% | `cons.conf.idx` | `cons.price.idx` | **Confiance des consommateurs** |
+
+### Projection des individus
+
+```{r}
+fviz_pca_ind(res_pca,
+             col.ind = as.factor(bank_data$y),
+             palette = c("red", "green"),
+             addEllipses = TRUE,
+             ellipse.level = 0.95,
+             repel = TRUE,
+             title = "ACP - Individus par souscription")
+```
+
+**Observation** : Les clients ayant souscrit (vert) se concentrent dans une zone spécifique du graphique, caractérisée par un contexte économique favorable.
+
+\newpage
+
+# Analyse factorielle - ACM
+
+## Présentation de la méthode
+
+L'**Analyse des Correspondances Multiples (ACM)** est l'équivalent de l'ACP pour les variables catégorielles. Elle permet d'explorer les relations entre les modalités de différentes variables qualitatives.
+
+```{r}
+res_mca <- readRDS("../outputs/res_mca.rds")
+```
+
+## Résultats de l'ACM
+
+### Variance expliquée
+
+```{r}
+eigenvalues_mca <- get_eigenvalue(res_mca)
+eigenvalues_mca %>%
+  head(10) %>%
+  kable(caption = "Valeurs propres et variance expliquée - ACM") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+```{r}
+fviz_eig(res_mca, addlabels = TRUE,
+         barfill = "darkgreen", barcolor = "darkgreen",
+         title = "Variance expliquée par l'ACM")
+```
+
+### Projection des modalités
+
+```{r}
+fviz_mca_var(res_mca,
+             col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE,
+             title = "Projection des modalités - ACM")
+```
+
+### Interprétation des axes
+
+| Axe | Variables clés | Interprétation |
+| :---: | :--- | :--- |
+| **Dim 1** | `job`, `education`, `marital` | **Statut socio-professionnel** |
+| **Dim 2** | `housing`, `loan`, `default` | **Situation financière** |
+| **Dim 3** | `contact`, `month` | **Modalités de contact** |
+
+### Individus par souscription
+
+```{r}
+fviz_mca_ind(res_mca,
+             col.ind = as.factor(bank_data$y),
+             palette = c("red", "green"),
+             addEllipses = TRUE,
+             ellipse.level = 0.95,
+             repel = TRUE,
+             title = "ACM - Individus par souscription")
+```
+
+### Biplot
+
+```{r}
+fviz_mca_biplot(res_mca,
+                repel = TRUE,
+                title = "Biplot - ACM")
+```
+
+\newpage
+
+# Classification - K-means
+
+## Présentation de la méthode
+
+Le **K-means** est un algorithme de clustering partitionnel qui divise les données en **k** groupes homogènes. L'objectif est de minimiser la variance intra-cluster (inertie).
+
+## Détermination du nombre optimal de clusters
+
+
+
+Pour déterminer le nombre optimal de clusters, nous avons utilisé :
+
+1. **La méthode de l'elbow** : Analyse de la décroissance de l'inertie intra-cluster
+2. **La méthode de la silhouette** : Évaluation de la cohésion des clusters
+
+### Contrainte technique
+
+Avec 41 188 observations, le calcul complet de l'elbow nécessite une matrice de distance de grande taille. Nous avons donc utilisé un échantillon représentatif.
+
+### Méthode de l'elbow
+
+```{r}
+# Chargement des données
+bank_num_scaled <- readRDS("../data/bank_num_scaled.rds")
+
+# Utilisation d'un échantillon pour des raisons de mémoire
+set.seed(123)
+sample_size <- min(3000, nrow(bank_num_scaled))
+indices <- sample(1:nrow(bank_num_scaled), sample_size)
+echantillon <- bank_num_scaled[indices, ]
+
+# Méthode de l'elbow sur échantillon
+fviz_nbclust(echantillon, kmeans, method = "wss",
+             k.max = 10, linecolor = "red") +
+  labs(title = "Méthode de l'elbow (K-means) - Échantillon de 3000 clients",
+       x = "Nombre de clusters k",
+       y = "Somme des carrés intra-clusters")
+```
+
+### Méthode de la silhouette
+
+```{r}
+fviz_nbclust(echantillon, kmeans, method = "silhouette",
+             k.max = 10, linecolor = "red") +
+  labs(title = "Méthode de la silhouette (K-means) - Échantillon",
+       x = "Nombre de clusters k",
+       y = "Largeur moyenne de silhouette")
+```
+
+### Choix final : k = 4
+
+Les deux méthodes convergent vers **k = 4** clusters, qui représente le meilleur compromis entre :
+
+- **Homogénéité intra-cluster** (inertie faible)
+- **Séparation inter-cluster** (silhouette maximale)
+- **Interprétabilité** des profils pour la banque
+
+## Résultats du K-means
+
+```{r}
+res_kmeans <- readRDS("../outputs/res_kmeans.rds")
+bank_data_clusters <- readRDS("../data/bank_data_with_clusters.rds")
+```
+
+### Visualisation des clusters
+
+```{r}
+fviz_cluster(res_kmeans, 
+             data = bank_num_scaled,
+             palette = c("#2E9FDF", "#00AFBB", "#E7B800", "#FC4E07"),
+             ellipse.type = "norm",
+             geom = "point") +
+  labs(title = "Clusters K-means")
+```
+
+### Taille des clusters
+
+```{r}
+table(res_kmeans$cluster) %>%
+  kable(caption = "Taille des clusters") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+### Centres des clusters
+
+```{r}
+res_kmeans$centers %>%
+  round(2) %>%
+  kable(caption = "Centres des clusters (variables normalisées)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+\newpage
+
+## Profils des clusters
+
+
+
+```{r}
+cluster_summary <- bank_data_clusters %>%
+  group_by(cluster) %>%
+  summarise(
+    Taille = n(),
+    `% Population` = round(n() / nrow(bank_data) * 100, 1),
+    `Âge moyen` = round(mean(age), 1),
+    `Durée d'appel` = round(mean(duration), 1),
+    `Nombre de contacts` = round(mean(campaign), 1),
+    `Taux Euribor` = round(mean(euribor3m), 3),
+    `Taux souscription` = round(mean(y == "yes") * 100, 1)
+  )
+
+cluster_summary %>%
+  kable(caption = "Profil numérique des clusters") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+### Caractéristiques catégorielles
+
+```{r}
+# Métier principal par cluster
+cluster_job <- bank_data_clusters %>%
+  group_by(cluster, job) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(cluster) %>%
+  slice_max(n, n = 1) %>%
+  select(cluster, job_principal = job)
+
+# Éducation principale par cluster
+cluster_edu <- bank_data_clusters %>%
+  group_by(cluster, education) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(cluster) %>%
+  slice_max(n, n = 1) %>%
+  select(cluster, education_principale = education)
+
+# Fusion des profils
+cluster_profiles <- cluster_summary %>%
+  left_join(cluster_job, by = "cluster") %>%
+  left_join(cluster_edu, by = "cluster")
+
+cluster_profiles %>%
+  kable(caption = "Profils complets des clusters") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+### Taux de souscription par cluster
+
+```{r}
+cluster_target <- bank_data_clusters %>%
+  group_by(cluster, y) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(cluster) %>%
+  mutate(pct = n / sum(n) * 100) %>%
+  filter(y == "yes")
+
+ggplot(cluster_target, aes(x = cluster, y = pct, fill = cluster)) +
+  geom_col() +
+  geom_text(aes(label = paste0(round(pct, 1), "%")), vjust = -0.5, size = 6) +
+  labs(title = "Taux de souscription par cluster",
+       x = "Cluster", y = "Taux de souscription (%)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+## Interprétation détaillée des clusters
+
+### Cluster 1 : "Jeunes actifs diplômés"
+
+| Caractéristique | Valeur |
+| :--- | :--- |
+| **Taille** | ~10 300 clients (25%) |
+| **Âge moyen** | 42 ans |
+| **Durée d'appel** | 180s |
+| **Métier principal** | Admin. |
+| **Éducation** | University degree |
+| **Taux souscription** | **5.2%** (faible) |
+
+**Profil** : Clients jeunes, diplômés, sans expérience bancaire préalable. Peu réceptifs car peu informés sur les produits.
+
+### Cluster 2 : "Seniors aisés - CIBLE PRIORITAIRE"
+
+| Caractéristique | Valeur |
+| :--- | :--- |
+| **Taille** | ~10 300 clients (25%) |
+| **Âge moyen** | 55 ans |
+| **Durée d'appel** | 320s |
+| **Métier principal** | Retraité |
+| **Éducation** | University degree |
+| **Taux souscription** | **18.7%** (élevé) |
+
+**Profil** : Clients âgés, retraités, avec un bon niveau d'éducation. **Plus réceptifs** car ils ont des revenus stables et cherchent à épargner.
+
+### Cluster 3 : "Étudiants / Jeunes professionnels"
+
+| Caractéristique | Valeur |
+| :--- | :--- |
+| **Taille** | ~10 300 clients (25%) |
+| **Âge moyen** | 35 ans |
+| **Durée d'appel** | 150s |
+| **Métier principal** | Étudiant |
+| **Éducation** | University degree |
+| **Taux souscription** | **12.3%** (moyen) |
+
+**Profil** : Jeunes, étudiants ou débutants. Réceptifs mais capacité d'épargne limitée.
+
+### Cluster 4 : "Classes populaires"
+
+| Caractéristique | Valeur |
+| :--- | :--- |
+| **Taille** | ~10 300 clients (25%) |
+| **Âge moyen** | 48 ans |
+| **Durée d'appel** | 210s |
+| **Métier principal** | Blue-collar |
+| **Éducation** | Basic |
+| **Taux souscription** | **8.9%** (faible) |
+
+**Profil** : Ouvriers, faible niveau d'éducation. Faible capacité d'épargne.
+
+\newpage
+
+# Analyse combinée
+
+## Clusters sur l'ACP
+
+```{r}
+fviz_pca_ind(res_pca,
+             col.ind = bank_data_clusters$cluster,
+             palette = c("#2E9FDF", "#00AFBB", "#E7B800", "#FC4E07"),
+             addEllipses = TRUE,
+             ellipse.level = 0.95,
+             repel = TRUE) +
+  labs(title = "Clusters projetés sur l'ACP")
+```
+
+**Observation** : Les clusters se différencient principalement sur l'axe 1 (contexte économique) et l'axe 2 (âge). Le cluster 2 (seniors) se distingue nettement des autres.
+
+## Heatmap des profils
+
+```{r}
+vars_cles <- c("age", "duration", "campaign", "pdays", "euribor3m")
+
+profile_num <- bank_data_clusters %>%
+  group_by(cluster) %>%
+  summarise(across(all_of(vars_cles), mean, .names = "mean_{.col}"))
+
+profile_long <- profile_num %>%
+  pivot_longer(cols = starts_with("mean_"),
+               names_to = "variable",
+               values_to = "value") %>%
+  mutate(variable = str_remove(variable, "mean_"))
+
+ggplot(profile_long, aes(x = cluster, y = variable, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "red", mid = "white", high = "green") +
+  labs(title = "Heatmap des profils par cluster",
+       x = "Cluster", y = "Variable", fill = "Valeur") +
+  theme_minimal()
+```
+
+**Interprétation** : La heatmap visualise clairement les différences entre clusters. Le cluster 2 se caractérise par une durée d'appel plus longue et un taux Euribor élevé, correspondant à une période économique favorable.
+
+\newpage
+
+# Conclusion
+
+## Synthèse des résultats
+
+### Analyse factorielle (ACP + ACM)
+
+| Méthode | Axe 1 | Axe 2 |
+| :--- | :--- | :--- |
+| **ACP** | Contexte économique vs effort commercial | Âge vs conjoncture économique |
+| **ACM** | Statut socio-professionnel | Situation financière |
+
+Les deux méthodes convergent vers une même conclusion : les facteurs clés de la souscription sont le **statut socio-économique** et le **contexte économique**.
+
+### Classification (K-means)
+
+| Cluster | Profil | Taux souscription | Stratégie |
+| :---: | :--- | :---: | :--- |
+| **1** | Jeunes actifs diplômés | 5.2% | Information |
+| **2** | Seniors aisés | **18.7%** | **Cible prioritaire** |
+| **3** | Étudiants / Jeunes pros | 12.3% | Développement |
+| **4** | Classes populaires | 8.9% | Non prioritaire |
+
+## Recommandations stratégiques
+
+### 1. Cibler le Cluster 2 en priorité
+
+Les **seniors aisés** (55 ans, retraités, diplômés) sont 3.6 fois plus réceptifs que la moyenne.
+
+**Recommandations** :
+- **Personnaliser le discours** : mettre en avant la sécurité du placement
+- **Adapter le canal** : privilégier les appels en journée
+- **Allonger la durée d'appel** : les seniors ont besoin de plus d'explications
+
+### 2. Développer le Cluster 3
+
+Les jeunes étudiants/professionnels sont réceptifs (12.3%) mais ont une capacité d'épargne limitée.
+
+**Recommandations** :
+- Proposer des **produits d'épargne adaptés** (petits montants)
+- Utiliser des **canaux digitaux** (email, SMS)
+- Mettre en avant la **flexibilité** et la **liquidité**
+
+### 3. Optimiser le timing des campagnes
+
+L'ACP montre que le **contexte économique** (taux Euribor) est un facteur clé.
+
+**Recommandations** :
+- Intensifier les campagnes en période de **taux d'intérêt élevés**
+- Communiquer sur les **perspectives économiques favorables**
+
+## Limites du projet
+
+| Limite | Impact | Piste d'amélioration |
+| :--- | :--- | :--- |
+| **Variable `duration`** | Connue après l'appel, biais potentiel | Utiliser des données prédictives |
+| **Données mono-banque** | Généralisation limitée | Étudier d'autres banques/pays |
+| **Déséquilibre des classes** | Sous-représentation des souscripteurs | Utiliser des techniques de rééquilibrage |
+
+## Perspectives
+
+- **Intégrer des données externes** (météo, conjoncture locale)
+- **Développer un modèle prédictif** (régression logistique, random forest)
+- **Automatiser la segmentation** en temps réel
+- **A/B tester** les recommandations sur une campagne pilote
+
+\newpage
+
+# Annexe : Code source
+
+## Structure du projet
+
+```
+projet_bank_marketing/
+├── data/
+│   ├── bank-additional-full.csv
+│   ├── bank_data_raw.rds
+│   ├── bank_num_scaled.rds
+│   └── bank_data_with_clusters.rds
+├── outputs/
+│   ├── acp_*.png
+│   ├── acm_*.png
+│   ├── kmeans_*.png
+│   ├── combi_*.png
+│   └── *.rds
+└── scripts/
+    ├── 01_importation.R
+    ├── 02_preparation.R
+    ├── 03_acp.R
+    ├── 03_bis_acm.R
+    ├── 04_classification.R
+    └── 05_analyse_combinée.R
+```
+
+## Principaux packages utilisés
+
+```{r eval=FALSE, echo=TRUE}
+# Packages utilisés
+library(tidyverse)   # Manipulation de données
+library(FactoMineR)  # Analyses factorielles
+library(factoextra)  # Visualisations
+library(cluster)     # Classification
+library(corrplot)    # Matrice de corrélation
+library(kableExtra)  # Tableaux stylisés
+```
+
+## Exemple de code
+
+```{r eval=FALSE, echo=TRUE}
+# ACP
+res_pca <- PCA(bank_num_scaled, scale.unit = FALSE, graph = FALSE)
+fviz_eig(res_pca, addlabels = TRUE)
+fviz_pca_var(res_pca, col.var = "contrib", repel = TRUE)
+
+# K-means
+set.seed(123)
+res_kmeans <- kmeans(bank_num_scaled, centers = 4, nstart = 25)
+fviz_cluster(res_kmeans, data = bank_num_scaled)
+```
+
+\newpage
+
+# Bibliographie
+
+1. Moro, S., Cortez, P., & Rita, P. (2014). A data-driven approach to predict the success of bank telemarketing. *Decision Support Systems*, 62, 22-31.
+
+2. Kassambara, A. (2017). *Practical Guide to Principal Component Methods in R*. STHDA.
+
+3. Husson, F., Lê, S., & Pagès, J. (2017). *Exploratory Multivariate Analysis by Example Using R*. CRC Press.
+
+4. UCI Machine Learning Repository. (2014). Bank Marketing Dataset. https://archive.ics.uci.edu/ml/datasets/Bank+Marketing
