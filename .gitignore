@@ -1,0 +1,13 @@
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+.Rproj
+*.html
+*.pdf
+*.log
+.DS_Store
+
+# Données privées ou volumineuses
+data/*.csv
+data/*.xlsx
